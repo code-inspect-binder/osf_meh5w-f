@@ -1,0 +1,51 @@
+model {
+
+  #data is nagents, ntrials, index of vals, matrix of contributions (c), and average contribution (Ga)
+
+  for (g in 1:ngroups) {
+
+    for (n in 1:groupSize) {
+  
+      #Gb1[n] ~ dunif(0,20) #initial beliefs about what others will contribute
+      omega1[n,g] ~ dbeta(1,1) #dnorm(0,1)T(0,1) #initial weighting of beliefs about others contributions in choice of own contribution, relative to prefs
+      lambda[n,g] ~ dbeta(1,1)#dnorm(0,1)T(0,1) #decay rate in weighting of beliefs about others - prefs dominate over time
+      gamma[n,g] ~ dbeta(1,1)#dnorm(0,1)T(0,1) #parameter weighting of beliefs about what others will contribute, relative to observed contribution
+      p0[n,g] <- 0#~ dunif(0,20) #intercept of linear model relating preferred contributions to possible contribution values
+      pbeta[n,g] ~ dbeta(1,1)#dunif(0,1) #slope of linear model relating preferred contributions to possible contribution values
+      
+      for (i in 1:length(vals)) {
+        pvals[n,i,g] <- p0[n,g] + (pbeta[n,g]*vals[i]) #vector of preferred contributions for each possible value - linear relationship
+      }
+      
+      omega[n,1,g] <- omega1[n,g]
+      
+      #assume beliefs about others on first trial is reflected in first contribution. Simplification for model.
+      Gb[n,1,g] <- c[n,1,g] 
+      
+      mu_c[n,1,g] <- Ga[1,g]
+    }
+  
+  
+    for (t in 2:ntrials) {
+      
+      for (n in 1:groupSize) {
+      
+        Gb[n,t,g] <- (gamma[n,g]*(Gb[n,t-1,g]))+((1-gamma[n,g])*(Ga[t-1,g]))
+        
+        #this line is necessary to avoid zero indexing
+        pval_index[n,t,g] <- ifelse(round(Gb[n,t,g])>1,round(Gb[n,t,g]),1)
+        
+        p[n,t,g] <- pvals[n,pval_index[n,t,g],g]
+        
+        omega[n,t,g] <- omega[n,t-1,g]*(1-lambda[n,g])#exp(-lambda[n])
+        
+        # departs from simulation function. Data needs to be stochastic,
+        # so we don't simulate c directly, rather mean of c distribution
+        mu_c[n,t,g] <- ((omega[n,t,g])*Gb[n,t,g]) + ((1-omega[n,t,g])*p[n,t,g]) 
+        
+        c[n,t,g] ~ dnorm(mu_c[n,t,g],.1)
+      }
+      
+    }
+  }
+}
