@@ -1,0 +1,180 @@
+model {
+
+  #data for CC model is nagents, ntrials, index of vals, matrix of contributions (c), and average contribution (Ga)
+  #data for EWA model is nagents, ntrials, ntokens, pi, matrix of contributions (c), and rest of the groups contribution (Gc)
+  
+  # priors for Bayesian t-test
+  mu_alpha ~ dnorm(0,1) 
+
+  for (g in 1:ngroups) {
+
+    for (s in 1:groupSize) {
+    
+      alpha[s,g] ~ dnorm(mu_alpha,1)
+      mu[s,g] ~ dnorm(0,1)
+    
+      sigma[s,g] ~ dunif(1,100) #concentration parameter for reparameterised beta distribution - assumed equal uncertainty due to within subs
+    
+      # reparameterising beta prior for indicator parameter in non-punish condition 
+      probit(mu_psy[s,g,1]) <- mu[s,g] # probit descale - - mean for cond is lower than overall
+      shape1_psy[s,g,1] <- (mu_psy[s,g,1]) * sigma[s,g]
+      shape2_psy[s,g,1] <- (1 - mu_psy[s,g,1]) * sigma[s,g]  
+    
+      # reparameterising beta prior for indicator parameter in punish condition 
+      probit(mu_psy[s,g,2]) <- mu[s,g] + alpha[s,g] # probit descale - - mean for cond is higher than overall
+      shape1_psy[s,g,2] <- mu_psy[s,g,2] * sigma[s,g]
+      shape2_psy[s,g,2] <- (1 - mu_psy[s,g,2]) * sigma[s,g]  
+
+      #--------------------------------------------------------------------------------------------------------------
+      #----------------------------------condition level priors for both models-------------------------------------
+      #--------------------------------------------------------------------------------------------------------------
+
+      for (cond in 1:2) {
+        
+        # ----------------- CC model ------
+    
+        omega1[s,g,cond] ~ dbeta(1,1) #initial weighting of beliefs about others contributions in choice of own contribution, relative to prefs
+        lambda[s,g,cond] ~ dbeta(1,1) #decay rate in weighting of beliefs about others - prefs dominate over time
+        gamma[s,g,cond] ~ dbeta(1,1) #parameter weighting of beliefs about what others will contribute, relative to observed contribution
+        p0[s,g,cond] ~ dunif(0,20) #intercept of linear model relating preferred contributions to possible contribution values
+        pbeta[s,g,cond] ~ dbeta(1,1) #slope of linear model relating preferred contributions to possible contribution values
+        
+        for (i in 1:length(vals)) {
+          pvals[s,i,g,cond] <- p0[s,g,cond] + (pbeta[s,g,cond]*vals[i]) #vector of preferred contributions for each possible value - linear relationship
+        }
+        
+        omega[s,1,g,cond] <- omega1[s,g,cond]
+        
+        #assume beliefs about others on first trial is reflected in first contribution. Simplification for model.
+        Gb[s,1,g,cond] <- c[s,1,g,cond] 
+        
+        mu_c[s,1,g,cond] <- Ga[1,g,cond]
+        
+        #---------------- EWA model ---------------------------
+        # weighting of forgone versus received payoffs
+        delta[s,g,cond] ~ dbeta(1,1) 
+        
+        #discounting of old trials - speed at which agents commit to a strategy
+        #higher number means older trials have great influence and strategy fixation is slower
+        rho[s,g,cond] ~ dbeta(1,1)
+      
+        #memory of old attractions - volatility assumption about environ. priors (0,1)
+        #higher number means old attractions are weighted higher
+        phi[s,g,cond] ~ dbeta(1,1)
+      
+        #consistency of choice with attractions - inverse heat - explore exploit
+        theta[s,g,cond] ~ dgamma(.1,.1)
+    
+        #trial 1 - priors for activations A, experience N, and initial contribution
+        N[s,1,g,cond] <- 1
+        for (j in 1:(ntokens +1)) {
+          A[s,1,j,g,cond] <- 0#rnorm(10,10,10)
+        }
+        c[s,1,g,cond] ~ dunif(0,ntokens)
+      }
+    }
+  
+    #--------------------------------------------------------------------------------------------------------------
+    #----------------------------------Specify CC model -----------------------------------------------------------
+    #--------------------------------------------------------------------------------------------------------------
+    
+    for (t in 2:ntrials) {
+      
+      for (s in 1:groupSize) {
+      
+        for (cond in 1:2) {
+      
+          # beliefs about others contributions - learning rule
+          Gb[s,t,g,cond] <- (gamma[s,g,cond]*(Gb[s,t-1,g,cond]))+((1-gamma[s,g,cond])*(Ga[t-1,g,cond]))
+          
+          #this line is necessary to avoid zero indexing in beliefs
+          pval_index[s,t,g,cond] <- ifelse(round(Gb[s,t,g,cond])>1,round(Gb[s,t,g,cond]),1)
+        
+          #preferences - linear function of possible values to contribute
+          p[s,t,g,cond] <- pvals[s,pval_index[s,t,g,cond],g,cond]
+        
+          # weighing parameter of beliefs versus preferences - decays at rate lambda
+          omega[s,t,g,cond] <- omega[s,t-1,g,cond]*(1-lambda[s,g,cond])
+        
+          # departs from simulation function. Data needs to be stochastic,
+          # so we don't simulate c directly, rather mean of c distribution
+          mu_c_CC[s,t,g,cond] <- ((omega[s,t,g,cond])*Gb[s,t,g,cond]) + ((1-omega[s,t,g,cond])*p[s,t,g,cond]) 
+        
+        }
+      }
+      
+    }
+  
+    #--------------------------------------------------------------------------------------------------------------
+    #----------------------------------Specify EWA model -----------------------------------------------------------
+    #--------------------------------------------------------------------------------------------------------------
+    
+    for (t in 2:ntrials) {
+      
+      for (s in 1:groupSize) {
+      
+        for (cond in 1:2) {
+
+      
+          N[s,t,g,cond] <- (rho[s,g,cond]*N[s,t-1,g,cond]) + 1 #eqn 2.1
+          
+          for (j in 1:(ntokens +1)) { 
+            A[s,t,j,g,cond] <- ( 
+              
+              (phi[s,g,cond]*N[s,t-1,g,cond]*A[s,t-1,j,g,cond]) + #prior activations
+              (delta[s,g,cond] + ((1-delta[s,g,cond])*(c_choice_index[s,t-1,g,cond]==j))) * #indicates whether jth token was chosen
+              ((((j+Gc[s,t-1,g,cond])*pi)/groupSize)-j) # calculate payoff for each possible contrib., (Gc = mean of others' choice)
+              
+              )/
+              N[s,t,g,cond] #experience weighting
+            
+            expA[s,t,j,g,cond] <- exp(theta[s,g,cond]*A[s,t,j,g,cond])
+            
+          }
+          
+          for (j in 1:(ntokens +1)) {    
+            P[s,t,j,g,cond] <- expA[s,t,j,g,cond]/sum(expA[s,t,,g,cond])
+          }
+          
+          c_EWA_index[s,t,g,cond] ~ dcat(P[s,t,,g,cond])
+          mu_c_EWA[s,t,g,cond] <- vals[c_EWA_index[s,t,g,cond]]
+          
+        }
+      }
+    }
+  
+    # ----------------------mixture/comparison model----------------------------------
+    for (s in 1:groupSize) {
+      
+      # reparameterised beta prior on mixture parameter
+      # Z = 0 means EWA model, Z = 1 means CC model
+      # psy is probability of CC model
+      # prior for psy is re-parameterised beta distribution - see top
+      
+      #--- no punishment condition ----
+      psy[s,g,1] ~ dbeta(shape1_psy[s,g,1]+1,shape2_psy[s,g,1]+1)
+      Z[s,g,1] ~ dbern(psy[s,g,1])
+      
+      for (t in 2:ntrials) {
+  
+        nu_c[s,t,g,1] <- ifelse(Z[s,g,1]==1,mu_c_CC[s,t,g,1],mu_c_EWA[s,t,g,1])
+        c[s,t,g,1] ~ dnorm(nu_c[s,t,g,1],.1)
+        
+      }
+
+      #--- punishment condition ----
+      psy[s,g,2] ~ dbeta(shape1_psy[s,g,2]+1,shape2_psy[s,g,2]+1)
+      Z[s,g,2] ~ dbern(psy[s,g,2])
+
+      for (t in 2:ntrials) {
+  
+        nu_c[s,t,g,2] <- ifelse(Z[s,g,2]==1,mu_c_CC[s,t,g,2],mu_c_EWA[s,t,g,2])
+        c[s,t,g,2] ~ dnorm(nu_c[s,t,g,2],.1)
+        
+      }
+      
+    }
+  
+  }
+
+}

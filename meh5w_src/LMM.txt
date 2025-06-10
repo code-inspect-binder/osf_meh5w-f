@@ -1,0 +1,130 @@
+model {
+
+  #data for CC model is nagents, ntrials, index of vals, matrix of contributions (c), and average contribution (Ga)
+  #data for EWA model is nagents, ntrials, ntokens, pi, and matrix of contributions (c)
+
+  for (n in 1:nagents) {
+    
+    #--------------------------------------------------------------------------------------------------------------
+    #----------------------------------individual level priors for both models-------------------------------------
+    #--------------------------------------------------------------------------------------------------------------
+    
+    # ----------------- CC model ------
+
+    omega1[n] ~ dbeta(1,1) #initial weighting of beliefs about others contributions in choice of own contribution, relative to prefs
+    lambda[n] ~ dbeta(1,1) #decay rate in weighting of beliefs about others - prefs dominate over time
+    gamma[n] ~ dbeta(1,1) #parameter weighting of beliefs about what others will contribute, relative to observed contribution
+    p0[n] ~ dunif(0,20) #intercept of linear model relating preferred contributions to possible contribution values
+    pbeta[n] ~ dbeta(1,1) #slope of linear model relating preferred contributions to possible contribution values
+    
+    for (i in 1:length(vals)) {
+      pvals[n,i] <- p0[n] + (pbeta[n]*vals[i]) #vector of preferred contributions for each possible value - linear relationship
+    }
+    
+    omega[n,1] <- omega1[n]
+    
+    #assume beliefs about others on first trial is reflected in first contribution. Simplification for model.
+    Gb[n,1] <- c[n,1] 
+    
+    mu_c[n,1] <- Ga[1]
+    
+    #---------------- EWA model ---------------------------
+    # weighting of forgone versus received payoffs
+    delta[n] ~ dbeta(1,1) #priors (0,1)
+    
+    #discounting of old trials - speed at which agents commit to a strategy priors (0,1)
+    #higher number means older trials have great influence and strategy fixation is slower
+    rho[n] ~ dbeta(1,1)
+    
+    #memory of old attractions - volatility assumption about environ. priors (0,1)
+    #higher number means old attractions are weighted higher
+    phi[n] ~ dbeta(1,1)
+    
+    #consistency of choice with attractions - inverse heat - explore exploit
+    theta[n] ~ dgamma(.1,.1)
+
+    #trial 1 - priors for activations A and experience N
+    
+    N[n,1] <- 1
+    for (j in 1:(ntokens+1)) {
+      A[n,1,j] <- 0#rnorm(10,10,10)
+    }
+    c[n,1] ~ dunif(0,ntokens)
+  }
+
+  #--------------------------------------------------------------------------------------------------------------
+  #----------------------------------Specify CC model -----------------------------------------------------------
+  #--------------------------------------------------------------------------------------------------------------
+  
+  for (t in 2:ntrials) {
+    
+    for (n in 1:nagents) {
+    
+      Gb[n,t] <- (gamma[n]*(Gb[n,t-1]))+((1-gamma[n])*(Ga[t-1]))
+      
+      #this line is necessary to avoid zero indexing
+      pval_index[n,t] <- ifelse(round(Gb[n,t])>1,round(Gb[n,t]),1)
+      
+      p[n,t] <- pvals[n,pval_index[n,t]]
+      
+      omega[n,t] <- omega[n,t-1]*(1-lambda[n])#exp(-lambda[n])
+      
+      # departs from simulation function. Data needs to be stochastic,
+      # so we don't simulate c directly, rather mean of c distribution
+      mu_c_CC[n,t] <- ((omega[n,t])*Gb[n,t]) + ((1-omega[n,t])*p[n,t]) 
+      
+    }
+    
+  }
+
+  #--------------------------------------------------------------------------------------------------------------
+  #----------------------------------Specify EWA model -----------------------------------------------------------
+  #--------------------------------------------------------------------------------------------------------------
+  
+  for (t in 2:ntrials) {
+    
+    for (n in 1:nagents) {
+    
+      N[n,t] <- (rho[n]*N[n,t-1]) + 1 #eqn 2.1
+      
+      for (j in 1:(ntokens+1)) { # + 1 because there are n + 1 possible contribs - integer vals & 0 - need to treat A as index
+        A[n,t,j] <- ( 
+          
+          (phi[n]*N[n,t-1]*A[n,t-1,j]) + #prior activations
+          (delta[n] + ((1-delta[n])*(c_choice_index[n,t-1]==j))) * #indicates whether jth token was chosen
+          ((((j+Gc[n,t-1])*pi)/nagents)-j) # calculate payoff for each possible contrib., (Gc = mean of others' choice)
+          
+          )/
+          N[n,t] #experience weighting
+        
+        expA[n,t,j] <- exp(theta[n]*A[n,t,j])
+        
+      }
+      
+      for (j in 1:(ntokens+1)) {    
+        P[n,t,j] <- expA[n,t,j]/sum(expA[n,t,])
+      }
+      
+      c_EWA_index[n,t] ~ dcat(P[n,t,])
+      mu_c_EWA[n,t] <- vals[c_EWA_index[n,t]]
+
+    }
+  }
+
+  # ----------------------mixture model----------------------------------
+  for (n in 1:nagents) {
+    
+    #sigma[n] ~ dgamma(.1,.1)
+    psy[n] ~ dbeta(1,1)
+    Z[n] ~ dbern(psy[n])
+      
+    for (t in 2:ntrials) {
+
+      nu_c[n,t] <- ifelse(Z[n]==1,mu_c_CC[n,t],mu_c_EWA[n,t])
+      
+      c[n,t] ~ dnorm(nu_c[n,t],.1)
+      
+    }
+  }
+
+}

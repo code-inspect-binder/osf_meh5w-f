@@ -1,0 +1,69 @@
+model {
+
+  # data is nagents, ntrials, ntokens, pi, and matrix of contributions (c)
+  
+  for (g in 1:ngroups) {
+
+    for (n in 1:groupSize) {
+  
+      #---------------- parameters ---------------------------
+      # weighting of forgone versus received payoffs
+      delta[n,g] ~ dbeta(1,1) #priors (0,1)
+      
+      #discounting of old trials - speed at which agents commit to a strategy priors (0,1)
+      #higher number means older trials have great influence and strategy fixation is slower
+      rho[n,g] ~ dbeta(1,1)
+      
+      #memory of old attractions - volatility assumption about environ. priors (0,1)
+      #higher number means old attractions are weighted higher
+      phi[n,g] ~ dbeta(1,1)
+      
+      #consistency of choice with attractions - inverse heat - explore exploit
+      lambda[n,g] ~ dgamma(.1,.1)
+      #---------------------------------------------------------------
+      
+      #---- trial 1 - priors for activations A and experience N  -----
+      
+      N[n,1,g] <- 1
+      for (j in 1:(ntokens+1)) {
+        A[n,1,j,g] <- 0#rnorm(10,10,10)
+      }
+      
+      mu_c[n,1,g] ~ dunif(0,ntokens)
+      c[n,1,g] ~ dunif(0,ntokens)
+    
+    }
+    #---------------------------------------------------------------
+    
+    for (t in 2:ntrials) {
+      
+      for (n in 1:groupSize) {
+      
+        N[n,t,g] <- (rho[n,g]*N[n,t-1,g]) + 1 #eqn 2.1
+        
+        for (j in 1:(ntokens+1)) { 
+          A[n,t,j,g] <- ( 
+            
+            (phi[n,g]*N[n,t-1,g]*A[n,t-1,j,g]) + #prior activations
+            (delta[n,g] + ((1-delta[n,g])*(c_choice_index[n,t-1,g]==j))) * #indicates whether jth token was chosen
+            ((((j+Gc[n,t-1,g])*pi)/groupSize)-j) # calculate payoff for each possible contrib., (Gc = mean of others' choice)
+            
+            )/
+            N[n,t,g] #experience weighting
+          
+          expA[n,t,j,g] <- exp(lambda[n,g]*A[n,t,j,g])
+          
+        }
+        
+        for (j in 1:(ntokens+1)) {    
+          P[n,t,j,g] <- expA[n,t,j,g]/sum(expA[n,t,,g])
+        }
+        
+        c_index[n,t,g] ~ dcat(P[n,t,,g])
+        mu_c[n,t,g] <- vals[c_index[n,t,g]]
+        c[n,t,g] ~ dnorm(mu_c[n,t,g],.1)
+
+      }
+    }
+  }
+}
